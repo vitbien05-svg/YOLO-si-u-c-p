@@ -1,0 +1,85 @@
+# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
+# TPH-YOLOv5s backbone + PFFN v4 neck (Lu et al., Sensors 2023) + TPH (C3TR + CBAM) at 4 outputs
+# Comment format:  # <layer index>  <P level>  <shape out with v5s @640: channels x H x W>
+
+# Parameters
+nc: 80  # number of classes (overridden by data yaml, VisDrone = 10)
+depth_multiple: 0.33  # model depth multiple
+width_multiple: 0.50  # layer channel multiple
+anchors: 3  # 3 anchors per head, computed by autoanchor at train start (4 heads -> 12 anchors)
+
+# YOLOv5 v6.0 backbone (giống yolov5s-tph-reimplement.yaml)
+backbone:
+  # [from, number, module, args]
+  [[-1, 1, Conv, [64, 6, 2, 2]],    # 0   P1   32 x 320x320
+   [-1, 1, Conv, [128, 3, 2]],      # 1   P2   64 x 160x160
+   [-1, 3, C3, [128]],              # 2   P2   64 x 160x160   <- neck lấy P2 ở đây
+   [-1, 1, Conv, [256, 3, 2]],      # 3   P3  128 x  80x80
+   [-1, 6, C3, [256]],              # 4   P3  128 x  80x80    <- neck lấy P3 ở đây
+   [-1, 1, Conv, [512, 3, 2]],      # 5   P4  256 x  40x40
+   [-1, 9, C3, [512]],              # 6   P4  256 x  40x40    <- neck lấy P4 ở đây
+   [-1, 1, Conv, [1024, 3, 2]],     # 7   P5  512 x  20x20
+   [-1, 1, SPPF, [1024, 5]],        # 8   P5  512 x  20x20
+   [-1, 3, C3TR, [1024]],           # 9   P5  512 x  20x20
+  ]
+
+# PFFN v4 neck + TPH head
+head:
+  # ---------- CỘT 2: đi lên lần 1 (P5 -> P4 -> P3 -> P2) ----------
+  [[-1, 1, Conv, [512, 1, 1]],                   # 10  P5  256 x  20x20   <- nối lại ở 51
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],   # 11  P4  256 x  40x40
+   [[-1, 6], 1, Concat, [1]],                    # 12  P4  512 x  40x40   ghép backbone P4
+   [-1, 3, C3, [512, False]],                    # 13  P4  256 x  40x40   P4 node1
+   [-1, 1, CBAM, [512]],                         # 14  P4  256 x  40x40   <- dùng lại ở 30, 46
+
+   [-1, 1, Conv, [256, 1, 1]],                   # 15  P4  128 x  40x40
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],   # 16  P3  128 x  80x80
+   [[-1, 4], 1, Concat, [1]],                    # 17  P3  256 x  80x80   ghép backbone P3
+   [-1, 3, C3, [256, False]],                    # 18  P3  128 x  80x80   P3 node1
+   [-1, 1, CBAM, [256]],                         # 19  P3  128 x  80x80   <- dùng lại ở 25, 32
+
+   [-1, 1, Conv, [128, 1, 1]],                   # 20  P3   64 x  80x80
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],   # 21  P2   64 x 160x160
+   [[-1, 2], 1, Concat, [1]],                    # 22  P2  128 x 160x160  ghép backbone P2
+   [-1, 3, C3, [128, False]],                    # 23  P2   64 x 160x160  P2 node1
+   [-1, 1, CBAM, [128]],                         # 24  P2   64 x 160x160  <- dùng lại ở 27
+
+  # ---------- CỘT 3: đi lên lần 2 ----------
+   [19, 1, Conv, [128, 1, 1]],                   # 25  P3   64 x  80x80   lấy từ P3 node1
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],   # 26  P2   64 x 160x160
+   [[24, -1], 1, Concat, [1]],                   # 27  P2  128 x 160x160  ghép P2 node1
+   [-1, 3, C3, [128, False]],                    # 28  P2   64 x 160x160  P2 node2
+   [-1, 1, CBAM, [128]],                         # 29  P2   64 x 160x160  <- dùng lại ở 37
+
+   [14, 1, Conv, [256, 1, 1]],                   # 30  P4  128 x  40x40   lấy từ P4 node1
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],   # 31  P3  128 x  80x80
+   [[19, -1], 1, Concat, [1]],                   # 32  P3  256 x  80x80   ghép P3 node1
+   [-1, 3, C3, [256, False]],                    # 33  P3  128 x  80x80   P3 node2
+   [-1, 1, CBAM, [256]],                         # 34  P3  128 x  80x80   <- dùng lại ở 41
+
+  # ---------- CỘT 4: đi lên lần 3 -> đầu ra P2 ----------
+   [-1, 1, Conv, [128, 1, 1]],                   # 35  P3   64 x  80x80   lấy từ P3 node2
+   [-1, 1, nn.Upsample, [None, 2, 'nearest']],   # 36  P2   64 x 160x160
+   [[29, -1], 1, Concat, [1]],                   # 37  P2  128 x 160x160  ghép P2 node2
+   [-1, 1, C3TR, [128, False]],                  # 38  P2   64 x 160x160  ==> TPH 1 (vật tí hon)
+   [-1, 1, CBAM, [128]],                         # 39  P2   64 x 160x160
+
+  # ---------- ĐI XUỐNG: P2 -> P3 -> P4 -> P5 ----------
+   [-1, 1, Conv, [128, 3, 2]],                   # 40  P3   64 x  80x80
+   [34, 1, Conv, [128, 1, 1]],                   # 41  P3   64 x  80x80   lateral từ P3 node2
+   [[-2, -1], 1, Concat, [1]],                   # 42  P3  128 x  80x80   ghép 40 + 41
+   [-1, 1, C3TR, [256, False]],                  # 43  P3  128 x  80x80   ==> TPH 2 (vật nhỏ)
+   [-1, 1, CBAM, [256]],                         # 44  P3  128 x  80x80
+
+   [-1, 1, Conv, [256, 3, 2]],                   # 45  P4  128 x  40x40
+   [14, 1, Conv, [256, 1, 1]],                   # 46  P4  128 x  40x40   lateral từ P4 node1
+   [[-2, -1], 1, Concat, [1]],                   # 47  P4  256 x  40x40   ghép 45 + 46
+   [-1, 2, C3TR, [512, False]],                  # 48  P4  256 x  40x40   ==> TPH 3 (vật vừa)
+   [-1, 1, CBAM, [512]],                         # 49  P4  256 x  40x40
+
+   [-1, 1, Conv, [512, 3, 2]],                   # 50  P5  256 x  20x20
+   [[-1, 10], 1, Concat, [1]],                   # 51  P5  512 x  20x20   ghép layer 10
+   [-1, 3, C3TR, [1024, False]],                 # 52  P5  512 x  20x20   ==> TPH 4 (vật lớn)
+
+   [[38, 43, 48, 52], 1, Detect, [nc, anchors]], # 53  Detect(P2, P3, P4, P5)
+  ]
