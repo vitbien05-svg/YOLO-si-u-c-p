@@ -113,7 +113,8 @@ class TransformerLayer(nn.Module):
  
     def forward(self, x):
         x_ = self.ln1(x)
-        x = self.dropout(self.ma(self.q(x_), self.k(x_), self.v(x_))[0]) + x
+        # need_weights=False -> memory-efficient SDPA, the N x N attention map is never stored (see docs/CHANGES.md)
+        x =self.dropout(self.ma(self.q(x_), self.k(x_), self.v(x_), need_weights=False)[0]) + x
         x_ = self.ln2(x)
         x_ = self.fc2(self.dropout(self.act(self.fc1(x_))))
         x = x + self.dropout(x_)
